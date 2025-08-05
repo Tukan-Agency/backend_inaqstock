@@ -1,0 +1,37 @@
+[
+  {
+    "nombre": "Restaurante betel",
+    "descripcion": "Venta de carnes azadas y almuerzos tipicos",
+    "ubicacion": "Malacatán San Marcos",
+    "perfil_url": "https://www.ejemplo.com/lugar",
+    "categoria": ["restaurante", "comedor"]
+  },
+  {
+    "nombre": "Restaurante el buen amigo",
+    "descripcion": "Platos tipicos",
+    "ubicacion": "Malacatán San Marcos",
+    "perfil_url": "https://www.ejemplo.com/lugar",
+    "categoria": ["restaurante", "comedor"]
+  },
+  {
+    "nombre": "Peluquería el amigo",
+    "descripcion": "Servicios de corte de cabello",
+    "ubicacion": "Ciudad Ejemplo, País Ejemplo",
+    "perfil_url": "https://www.ejemplo.com/lugar",
+    "categoria": ["peluquería", "barbería"]
+  },
+  {
+    "nombre": "Gimansio el fuerte",
+    "descripcion": "Gimansio para entreamiento continuo",
+    "ubicacion": "Ciudad Ejemplo, País Ejemplo",
+    "perfil_url": "https://www.ejemplo.com/lugar",
+    "categoria": ["gimansio", "entrenamiento"]
+  },
+  {
+    "nombre": "Gimasio la sexta",
+    "descripcion": "Entramiento a todo dar",
+    "ubicacion": "Ciudad Ejemplo, País Ejemplo",
+    "perfil_url": "https://www.ejemplo.com/lugar",
+    "categoria": ["gimansio", "entrenamiento"]
+  }
+]
