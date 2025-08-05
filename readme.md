@@ -1,6 +1,6 @@
-# TypeScript Express API Bootstrap (base / project starter)
+# TypeScript Ultra speed Bakcend API
 
-This is a repository intended to serve as a starting point if you want to bootstrap a express API project in TypeScript.
+Infrasctura de proyecto de alta velocidad desarrado en typescript para empresa inaqstock
 
 ## Features
 
@@ -16,17 +16,17 @@ This is a repository intended to serve as a starting point if you want to bootst
 ## Running the app
 
 ```
-# install dependencies
-npm install
+# Instalación de dependencias
+yarn install
 
-# run in dev mode on port 3000
-npm run dev
+# Ejecución en el  port 3000
+yarn dev
 
-# generate production build
-npm run build
+# Compilación de la aplicación
+yarn build
 
-# run generated content in dist folder on port 3000
-npm run start
+# Ejecución del proyecto en modo compilación port 3000
+yarn start
 ```
 
 ## Testing
@@ -46,3 +46,5 @@ npm run lint
 # fix lint issues
 npm run lint:fix
 ```
+### Archivo Env
+El archivo .env contiene las variables de entorno para la aplicación. para poder configuralo, ubicarlo en el arhchivo .env.example y renombrarlo a .env
