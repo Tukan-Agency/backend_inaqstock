@@ -5,7 +5,10 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import ejs from "ejs";
 import authRouter from "./routes/authRouter";
+import positionRouter from "./routes/positionRouter";
+
 import "./db/db";
+
 
 dotenv.config();
 
@@ -42,6 +45,7 @@ app.use(
 );
 app.use(express.urlencoded({ extended: false }));
 app.use("/api/auth", authRouter);
+app.use("/api/positions", positionRouter); // Agregar esta línea
 
 // Template Engine
 app.set("port", process.env.PORT || 3000);
