@@ -2,18 +2,16 @@ import { Request, Response } from "express";
 import jwt, { JwtPayload } from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import dotenv from "dotenv";
-import { Document } from "mongoose";
+import { Document, Types } from "mongoose";
 import User, { IUser } from "../model/userModel";
 import UserOtp from "../model/userOtp";
 import { sendEmailVerify } from "./emailController";
 import { getUserByEmail } from "./services/userService";
 
-
 dotenv.config();
 
 //     await redis.del(`user:${email}`);
 // ESTO CUANDO EL USUARIO SE ACTUALICE
-
 
 const secret = process.env.AUTH_SECRET;
 if (!secret) {
@@ -28,7 +26,6 @@ export const login = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, password } = req.body;
 
- 
     const user = await getUserByEmail(email);
 
     if (!user) {
@@ -42,7 +39,12 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const payload = { email, username: user.username };
+    // CAMBIO AQUÍ: Incluir el ID del usuario en el payload del token
+    const payload = { 
+      id: (user._id as Types.ObjectId).toString(),
+      email, 
+      username: user.username 
+    };
     const token = jwt.sign(payload, secret, { expiresIn: "1h" });
 
     res.cookie("token", token, {
@@ -56,6 +58,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     res.status(500).json({ status: "error", message: "Error al iniciar sesión", error: error.message });
   }
 };
+
 export const checkEmail = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email } = req.body;
@@ -107,15 +110,15 @@ export const addUser = async (req: Request, res: Response): Promise<void> => {
       sequenceId,
     }) as Document<unknown, {}, IUser> & IUser & { _id: string };
 
-     const emailSent = await sendEmailVerify(newUser._id);
+    const emailSent = await sendEmailVerify(newUser._id);
     if (emailSent) {
-     res.status(201).json({ message: "Usuario registrado. Verifique su correo.", user: newUser });
-   } else {
+      res.status(201).json({ message: "Usuario registrado. Verifique su correo.", user: newUser });
+    } else {
       throw new Error("Error al enviar correo de verificación");
     }
   } catch (error: any) {
     res.status(500).json({ message: "Error al registrar usuario", error: error.message });
-     console.log(error);
+    console.log(error);
   }
 };
 
@@ -150,7 +153,7 @@ export const getSession = (req: AuthenticatedRequest, res: Response): void => {
       }
 
       res.status(200).json({
-        id: user._id,
+        id: (user._id as Types.ObjectId).toString(),
         name: user.name,
         email: user.email,
         username: user.username,
@@ -160,7 +163,6 @@ export const getSession = (req: AuthenticatedRequest, res: Response): void => {
       });
     } catch (err: any) {
       res.status(500).json({ message: "Error al obtener datos del usuario", error: err.message });
-     
     }
   });
 };
@@ -183,11 +185,17 @@ export const VerifyUser = async (req: Request, res: Response): Promise<void> => 
     if (!validOtp) throw new Error("Código OTP inválido");
 
     await User.updateOne({ _id: id }, { verifiedAt: Date.now() });
-
     await UserOtp.deleteMany({ user_id: id });
 
     const user = await User.findById(id);
-    const token = jwt.sign({ email: user?.email, username: user?.username }, secret, { expiresIn: "1h" });
+    
+    // CAMBIO AQUÍ: Incluir el ID del usuario en el payload del token
+    const payload = { 
+      id: (user?._id as Types.ObjectId).toString(),
+      email: user?.email, 
+      username: user?.username 
+    };
+    const token = jwt.sign(payload, secret, { expiresIn: "1h" });
 
     res.cookie("token", token, {
       httpOnly: true,
