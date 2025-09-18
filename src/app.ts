@@ -5,6 +5,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import ejs from "ejs";
 import authRouter from "./routes/authRouter";
+import balanceRouter from "./routes/balanceRouter";
 import positionRouter from "./routes/positionRouter";
 
 import "./db/db";
@@ -44,8 +45,12 @@ app.use(
   })
 );
 app.use(express.urlencoded({ extended: false }));
+
 app.use("/api/auth", authRouter);
 app.use("/api/positions", positionRouter); // Agregar esta línea
+
+// Blances
+app.use("/api/balance", balanceRouter);
 
 // Template Engine
 app.set("port", process.env.PORT || 3000);
