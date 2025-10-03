@@ -43,7 +43,8 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     const payload = { 
       id: (user._id as Types.ObjectId).toString(),
       email, 
-      username: user.username 
+      username: user.username,
+      surname: user.surname,
     };
     const token = jwt.sign(payload, secret, { expiresIn: "1h" });
 
@@ -132,7 +133,12 @@ export const logout = (req: Request, res: Response): void => {
 };
 
 export const getSession = (req: AuthenticatedRequest, res: Response): void => {
-  const token = req.cookies.token || req.headers.authorization?.split(" ")[1];
+  // Toma el token de cookie o de Authorization: Bearer
+  const bearer = req.headers.authorization?.startsWith("Bearer ")
+    ? req.headers.authorization.split(" ")[1]
+    : undefined;
+
+  const token = req.cookies?.token || bearer;
 
   if (!token) {
     res.status(401).json({ message: "Token no proporcionado" });
@@ -146,20 +152,56 @@ export const getSession = (req: AuthenticatedRequest, res: Response): void => {
     }
 
     try {
-      const user = await User.findOne({ email: decoded.email });
+      // Preferir buscar por id del payload (más robusto). Fallback a email si no hay id.
+      const userId = decoded?.id as string | undefined;
+      const userEmail = decoded?.email as string | undefined;
+
+      let user = userId ? await User.findById(userId) : undefined;
+      if (!user && userEmail) {
+        user = await User.findOne({ email: userEmail });
+      }
+
       if (!user) {
         res.status(401).json({ message: "Usuario no encontrado" });
         return;
       }
 
+      // Saneamos: omitimos password, __v, email y surname (según pediste)
+      const raw = typeof (user as any).toObject === "function" ? (user as any).toObject() : user;
+      const {
+        password: _omitPassword,
+        __v: _omitV,
+        email: _omitEmail,      // omitido
+        surname: _omitSurname,  // omitido
+        ...rest
+      } = raw;
+
+      // Normalizamos _id a string
+      const idString = (user._id as Types.ObjectId).toString();
+
+      // Normalizamos birthday a ISO (si viene como Date); el resto queda tal cual
+      const birthdayISO =
+        rest?.birthday instanceof Date ? rest.birthday.toISOString() : rest?.birthday;
+
+      const userResponse = {
+        ...rest,               // name, address, company, contactNumber, whatsapp, country, currency, role, sequenceId, username, etc.
+        birthday: birthdayISO, // normalizado a ISO
+        _id: idString,         // string
+        id: idString,          // alias
+        clientId: idString,    // alias para el frontend
+      };
+
       res.status(200).json({
+        status: "exito",
         id: (user._id as Types.ObjectId).toString(),
         name: user.name,
+        apellido: user.surname,
         email: user.email,
         username: user.username,
-        token: req.cookies.token,
-        iat: (req.user as JwtPayload)?.iat,
-        exp: (req.user as JwtPayload)?.exp,
+        user: userResponse,
+        token,              // si no lo quieres en la respuesta, puedes quitarlo
+        iat: decoded?.iat,  // tiempos del token
+        exp: decoded?.exp,
       });
     } catch (err: any) {
       res.status(500).json({ message: "Error al obtener datos del usuario", error: err.message });
@@ -195,7 +237,7 @@ export const VerifyUser = async (req: Request, res: Response): Promise<void> => 
       email: user?.email, 
       username: user?.username 
     };
-    const token = jwt.sign(payload, secret, { expiresIn: "1h" });
+    const token = jwt.sign(payload, secret, { expiresIn: "24h" });
 
     res.cookie("token", token, {
       httpOnly: true,
