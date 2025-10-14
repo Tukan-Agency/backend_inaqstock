@@ -13,6 +13,8 @@ import positionRouter from "./routes/positionRouter";
 import movementRouter from "./routes/movementRouter";
 import orderRouter from "./routes/orderRouter";
 import userRoutes from "./routes/userRouter";
+import verificationRouter from "./routes/verificationRouter";
+import { UPLOADS_DIR } from "./config/paths";
 
 dotenv.config();
 
@@ -45,8 +47,7 @@ const corsOptions: CorsOptions = {
     "Cache-Control",
     "Expires",
     "Pragma",
-    // headers personalizados:
-    "x-clientid", // importante en minúsculas (preflight)
+    "x-clientid",
     "x-clientId",
     "x-requestid",
     "x-requestId",
@@ -56,10 +57,11 @@ const corsOptions: CorsOptions = {
 };
 
 app.use(cors(corsOptions));
-// IMPORTANTE: usa regex en OPTIONS para evitar el error de path-to-regexp
 app.options(/.*/, cors(corsOptions));
-
 app.use(express.urlencoded({ extended: false }));
+
+// Servir archivos subidos SIEMPRE desde la misma ruta absoluta
+app.use("/uploads", express.static(UPLOADS_DIR));
 
 // Rutas API
 app.use("/api/auth", authRouter);
@@ -68,6 +70,7 @@ app.use("/api/positions", positionRouter);
 app.use("/api/movements", movementRouter);
 app.use("/api/orders", orderRouter);
 app.use("/api/balance", balanceRouter);
+app.use("/api/verification", verificationRouter);
 
 // Template Engine
 app.set("port", process.env.PORT || 3000);

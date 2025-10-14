@@ -31,6 +31,7 @@ export interface IUser extends Document {
   role: number;
   package: IPackage;
   sequenceId: number;
+  cuenta_verify: boolean; // ✅ nuevo campo
   verifiedAt?: Date | null;
   createdAt?: Date;
   updatedAt?: Date;
@@ -61,6 +62,10 @@ const userSchema = new Schema<IUser>(
       packageName: { type: String, required: true },
     },
     sequenceId: { type: Number, required: true, unique: true },
+
+    // ✅ Campo nuevo
+    cuenta_verify: { type: Boolean, default: false },
+
   },
   {
     timestamps: true,

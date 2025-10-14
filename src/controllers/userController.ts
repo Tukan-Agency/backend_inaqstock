@@ -200,3 +200,39 @@ export async function changeMyPassword(req: Request, res: Response): Promise<voi
     res.status(500).json({ message: "Error al cambiar contraseña", error: e.message });
   }
 }
+
+export const toggleCuentaVerifyUser = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    // Buscar usuario actual
+    const user = await User.findById(id);
+    if (!user) {
+      res.status(404).json({ error: "Usuario no encontrado." });
+      return;
+    }
+
+    // Invertir el estado actual
+    const nuevoEstado = !user.cuenta_verify;
+
+    // Actualizar solo el campo cuenta_verify sin validar todo el documento
+    const updatedUser = await User.findByIdAndUpdate(
+      id,
+      { cuenta_verify: nuevoEstado },
+      { new: true, runValidators: false }
+    );
+
+    res.status(200).json({
+      message: nuevoEstado
+        ? "Cuenta verificada correctamente."
+        : "Verificación removida.",
+      cuenta_verify: updatedUser?.cuenta_verify,
+    });
+  } catch (error: any) {
+    console.error("❌ Error al actualizar cuenta_verify:", error);
+    res.status(500).json({
+      error: "Error al actualizar el estado de verificación.",
+      details: error.message,
+    });
+  }
+};
