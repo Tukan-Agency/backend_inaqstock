@@ -44,14 +44,28 @@ export const obtenerOrdenes: RequestHandler = async (_req, res, next) => {
 
 // GET /api/orders/client
 // Old: toma x-clientId en header
+// UPDATE: Ahora soporta ?mode=demo o ?mode=real
 export const obtenerOrdenesBycLient: RequestHandler = async (req, res, next) => {
   try {
     const clientId = req.header("x-clientId");
+    const mode = req.query.mode as string; // Leemos el modo
+
     if (!clientId) {
       res.status(400).json({ ok: false, msg: "x-clientId requerido" });
       return;
     }
-    const ordenes = await Order.find({ clientId }).lean();
+
+    // Filtro dinámico
+    const queryFilter: any = { clientId };
+
+    if (mode === "demo") {
+      queryFilter.isDemo = true;
+    } else {
+      // Para modo Real, traemos lo que NO sea true (incluye false y undefined legacy)
+      queryFilter.isDemo = { $ne: true };
+    }
+
+    const ordenes = await Order.find(queryFilter).lean();
     res.json({ ok: true, ordenes });
   } catch (error) {
     next(error);

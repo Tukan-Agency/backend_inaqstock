@@ -13,20 +13,24 @@ import positionRouter from "./routes/positionRouter";
 import movementRouter from "./routes/movementRouter";
 import orderRouter from "./routes/orderRouter";
 import userRoutes from "./routes/userRouter";
+import dashboardRouter from "./routes/dashboardRouter";
 import verificationRouter from "./routes/verificationRouter";
+import requestRouter from "./routes/requestRouter";
+import priceRouter from "./routes/priceRouter";
 import { UPLOADS_DIR } from "./config/paths";
+import demoRouter from "./routes/demoRouter";
 
 dotenv.config();
 
 const app: Application = express();
 
 const url_desarrollo = process.env.FRONT_URL_DEV;
+const url_tunel = process.env.FRONT_URL_TUNEL;
 const url_produccion = process.env.FRONT_URL_PROD;
 const url_dominio = process.env.DOMINIO_URL;
 
-const allowedOrigins = [url_desarrollo, url_produccion, url_dominio].filter(Boolean);
+const allowedOrigins = [url_desarrollo, url_tunel, url_produccion, url_dominio].filter(Boolean);
 
-// Middlewares
 app.use(cookieParser());
 app.use(express.json());
 
@@ -60,19 +64,31 @@ app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 app.use(express.urlencoded({ extended: false }));
 
-// Servir archivos subidos SIEMPRE desde la misma ruta absoluta
 app.use("/uploads", express.static(UPLOADS_DIR));
 
-// Rutas API
+// Middleware placeholder para socket.io (se llenará en el server)
+app.use((req, res, next) => {
+  // Si existe la instancia, la adjuntamos, si no, next.
+  // Esto evita errores si socket.io no se ha inicializado aún.
+  if ((global as any).io) {
+    req.app.set("socketio", (global as any).io);
+  }
+  next();
+});
+
 app.use("/api/auth", authRouter);
 app.use("/api/users", userRoutes);
 app.use("/api/positions", positionRouter);
 app.use("/api/movements", movementRouter);
 app.use("/api/orders", orderRouter);
+app.use("/api/admin/requests", requestRouter);
+app.use("/api/requests", requestRouter);
 app.use("/api/balance", balanceRouter);
 app.use("/api/verification", verificationRouter);
+app.use("/api/dashboard", dashboardRouter);
+app.use("/api/prices", priceRouter);
+app.use("/api/demo", demoRouter);
 
-// Template Engine
 app.set("port", process.env.PORT || 3000);
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "/config/email/views"));

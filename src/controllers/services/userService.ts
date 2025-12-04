@@ -3,25 +3,30 @@ import redis from "../config/redisClient";
 
 const TTL_SECONDS = 300;
 
-const getRedisKey = {
+export const getRedisKey = {
   email: (email: string) => `user:${email.trim().toLowerCase()}`,
   id: (id: string) => `user:id:${id}`,
+};
+
+// Purga de cache (id y/o email)
+export const purgeUserCache = async (params: { id?: string; email?: string }) => {
+  const jobs: Promise<any>[] = [];
+  if (params.id) jobs.push(redis.del(getRedisKey.id(params.id)));
+  if (params.email) jobs.push(redis.del(getRedisKey.email(params.email)));
+  if (jobs.length) await Promise.allSettled(jobs);
 };
 
 // GET por Email
 export const getUserByEmail = async (email: string): Promise<IUser | null> => {
   const key = getRedisKey.email(email);
-  console.log(`🔍 Buscar en cache: ${key}`);
   const cached = await redis.get(key);
 
   if (cached) {
     const user = JSON.parse(cached) as IUser;
-    console.log("✅ HIT en Redis:", user.email);
     return user;
   }
 
-  console.log("❌ MISS en Redis:", email);
-  const user = await User.findOne({ email }).lean();
+  const user = await User.findOne({ email: email.trim().toLowerCase() }).lean();
   if (user) {
     await redis.set(key, JSON.stringify(user), "EX", TTL_SECONDS);
     await redis.set(getRedisKey.id(user._id.toString()), JSON.stringify(user), "EX", TTL_SECONDS);
@@ -64,8 +69,7 @@ export const updateUser = async (id: string, updates: Partial<IUser>): Promise<I
   if (!user) return null;
 
   // Invalidar y refrescar caché
-  await redis.del(getRedisKey.id(id));
-  await redis.del(getRedisKey.email(user.email));
+  await purgeUserCache({ id, email: user.email });
 
   await redis.set(getRedisKey.email(user.email), JSON.stringify(user), "EX", TTL_SECONDS);
   await redis.set(getRedisKey.id(id), JSON.stringify(user), "EX", TTL_SECONDS);

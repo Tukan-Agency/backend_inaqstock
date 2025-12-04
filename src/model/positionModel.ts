@@ -23,6 +23,7 @@ export interface IPosition extends Document, IPositionMethods {
   profit?: number;
   profitPercentage?: number;
   status: 'open' | 'closed';
+  isDemo: boolean; // ✅ Nuevo campo
 }
 
 // Crear un tipo para el modelo que incluya los métodos
@@ -79,6 +80,12 @@ const positionSchema = new Schema<IPosition, PositionModel>(
       enum: ['open', 'closed'],
       required: true,
       default: 'open'
+    },
+    // ✅ Nuevo campo para separar posiciones DEMO
+    isDemo: {
+      type: Boolean,
+      default: false,
+      index: true
     }
   },
   {

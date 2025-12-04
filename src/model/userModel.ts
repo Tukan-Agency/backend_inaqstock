@@ -61,7 +61,12 @@ const userSchema = new Schema<IUser>(
       packageId: { type: String, required: true },
       packageName: { type: String, required: true },
     },
-    sequenceId: { type: Number, required: true, unique: true },
+    sequenceId: {
+      type: Number,
+      unique: true,   // único
+      sparse: true,   // MUY IMPORTANTE para permitir documentos sin sequenceId
+      required: false // ya no es requerido
+    },
 
     // ✅ Campo nuevo
     cuenta_verify: { type: Boolean, default: false },

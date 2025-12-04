@@ -53,14 +53,28 @@ export const obtenerMovimientosPaquete: RequestHandler = async (_req, res, next)
   }
 };
 
+// UPDATE: Ahora soporta ?mode=demo o ?mode=real
 export const obtenerMovimientosCliente: RequestHandler = async (req, res, next) => {
   try {
     const clientId = req.header("x-clientId");
+    const mode = req.query.mode as string; // Leemos el modo
+
     if (!clientId) {
       res.status(400).json({ ok: false, msg: "x-clientId requerido" });
       return;
     }
-    const movimientos = await History.find({ clientId });
+
+    // Filtro dinámico
+    const queryFilter: any = { clientId };
+
+    if (mode === "demo") {
+      queryFilter.isDemo = true;
+    } else {
+      // Para modo Real, traemos lo que NO sea true
+      queryFilter.isDemo = { $ne: true };
+    }
+
+    const movimientos = await History.find(queryFilter);
     res.json({ ok: true, movimientos });
   } catch (error) {
     next(error);
@@ -101,6 +115,27 @@ export const actualizarEstado: RequestHandler = async (req, res, next) => {
 
     await History.findByIdAndUpdate(_id, { status });
     res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// NUEVO: actualizar estado de movimientos por requestId (para usarlo desde Admin tras cambiar una solicitud)
+export const actualizarEstadoPorRequestId: RequestHandler = async (req, res, next) => {
+  try {
+    const requestId = req.body?.requestId as string | undefined;
+    const status = req.body?.status as string | undefined;
+
+    if (!requestId || typeof status !== "string") {
+      res.status(400).json({ ok: false, msg: "Campos inválidos" });
+      return;
+    }
+
+    const upd = await History.updateMany({ requestId }, { status });
+    res.json({
+      ok: true,
+      matched: (upd as any)?.matchedCount ?? (upd as any)?.matched ?? 0,
+    });
   } catch (error) {
     next(error);
   }

@@ -3,21 +3,26 @@ import {
   crearMovimiento,
   obtenerMovimientos,
   obtenerMovimientosPaquete,
-  actualizarEstado,
   obtenerMovimientosCliente,
   deleteMovement,
+  actualizarEstado,
+  actualizarEstadoPorRequestId,
 } from "../controllers/movementController";
-
-// Si quieres proteger con auth, importa tu middleware y añádelo.
-// import authenticate from "../middleware/auth";
 
 const router = Router();
 
-router.post("/new", /*authenticate,*/ crearMovimiento);
-router.get("/all", /*authenticate,*/ obtenerMovimientos);
-router.get("/package", /*authenticate,*/ obtenerMovimientosPaquete);
-router.post("/update/status", /*authenticate,*/ actualizarEstado);
-router.get("/clientId", /*authenticate,*/ obtenerMovimientosCliente);
-router.delete("/delete", /*authenticate,*/ deleteMovement);
+router.post("/new", crearMovimiento);
+router.get("/all", obtenerMovimientos);
+router.get("/paquete", obtenerMovimientosPaquete);
+
+// Ruta correcta actual
+router.get("/client", obtenerMovimientosCliente);
+
+// Alias legacy para evitar 404 si algún cliente usa /clientId
+router.get("/clientId", obtenerMovimientosCliente);
+
+router.delete("/delete", deleteMovement);
+router.post("/update/status", actualizarEstado);
+router.post("/update/status-by-requestId", actualizarEstadoPorRequestId);
 
 export default router;

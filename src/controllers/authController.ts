@@ -2,16 +2,16 @@ import { Request, Response } from "express";
 import jwt, { JwtPayload } from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import dotenv from "dotenv";
-import { Document, Types } from "mongoose";
 import User, { IUser } from "../model/userModel";
 import UserOtp from "../model/userOtp";
-import { sendEmailVerify } from "./emailController";
-import { getUserByEmail } from "./services/userService";
+import { sendEmailVerify } from "./emailController"; // usado en resendOtp / VerifyUser
+import {
+  getUserByEmail,
+  purgeUserCache,
+} from "../controllers/services/userService"; // <- añadimos purge
+import { getNextSequence, peekNextSequence } from "../utils/getNextSequence";
 
 dotenv.config();
-
-//     await redis.del(`user:${email}`);
-// ESTO CUANDO EL USUARIO SE ACTUALICE
 
 const secret = process.env.AUTH_SECRET;
 if (!secret) {
@@ -26,23 +26,29 @@ export const login = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, password } = req.body;
 
-    const user = await getUserByEmail(email);
+    const emailNorm = String(email || "")
+      .trim()
+      .toLowerCase();
+    const user = await getUserByEmail(emailNorm); // login sí puede beneficiarse de cache
 
     if (!user) {
-      res.status(400).json({ status: "error", message: "Usuario no encontrado" });
+      res
+        .status(400)
+        .json({ status: "error", message: "Usuario no encontrado" });
       return;
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
+    const isMatch = await bcrypt.compare(String(password || ""), user.password);
     if (!isMatch) {
-      res.status(401).json({ status: "error", message: "Credenciales inválidas" });
+      res
+        .status(401)
+        .json({ status: "error", message: "Credenciales inválidas" });
       return;
     }
 
-    // CAMBIO AQUÍ: Incluir el ID del usuario en el payload del token
-    const payload = { 
-      id: (user._id as Types.ObjectId).toString(),
-      email, 
+    const payload = {
+      id: String(user._id),
+      email: user.email,
       username: user.username,
       surname: user.surname,
     };
@@ -56,22 +62,41 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
     res.status(200).json({ status: "exito", message: "Ingreso exitoso", user });
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: "Error al iniciar sesión", error: error.message });
+    res
+      .status(500)
+      .json({
+        status: "error",
+        message: "Error al iniciar sesión",
+        error: error.message,
+      });
   }
 };
 
-export const checkEmail = async (req: Request, res: Response): Promise<void> => {
+/**
+ * Check-email SIN leer de Redis: consulta DB directo y purga cache si existiera basura.
+ */
+export const checkEmail = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   try {
-    const { email } = req.body;
-
-    if (!email || typeof email !== "string") {
+    const email = String(req.body?.email || "")
+      .trim()
+      .toLowerCase();
+    if (!email) {
       res.status(400).json({ exists: false, message: "Correo no válido" });
       return;
     }
 
-    const existingUser = await getUserByEmail(email);
+    // Consultamos directo a Mongo para evitar falsos positivos por cache
+    const existing = await User.exists({ email });
 
-    res.status(200).json({ exists: !!existingUser });
+    if (!existing) {
+      // Por si quedó basura en Redis, purgamos esa clave
+      await purgeUserCache({ email }).catch(() => {});
+    }
+
+    res.status(200).json({ exists: !!existing });
   } catch (error: any) {
     res.status(500).json({
       exists: false,
@@ -81,24 +106,39 @@ export const checkEmail = async (req: Request, res: Response): Promise<void> => 
   }
 };
 
+/**
+ * Ver próximo sequenceId (no reserva).
+ * GET /api/users/sequence/peek
+ */
+export const peekSequence = async (
+  _req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const next = await peekNextSequence("user_sequence", 10000);
+    res.status(200).json({ next });
+  } catch (e: any) {
+    res
+      .status(500)
+      .json({ message: "Error al consultar próximo ID", error: e.message });
+  }
+};
+
+/**
+ * Registrar usuario SIN enviar correo/OTP y asignando sequenceId de forma atómica.
+ * - Ignora cualquier sequenceId del body (servidor asigna).
+ * - A prueba de carreras: reintenta si choca con índice unique (E11000).
+ * - Marca verifiedAt inmediatamente (registro directo).
+ * - Hace login automático y setea cookie.
+ */
 export const addUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, surname, birthday, email, password, username, address, company, contactNumber, whatsapp, country, currency, role, package: userPackage, sequenceId } = req.body;
-
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      res.status(400).json({ message: "Este correo ya está registrado" });
-      return;
-    }
-
-    const hashed = await bcrypt.hash(password, 10);
-
-    const newUser = await User.create({
+    const {
       name,
       surname,
       birthday,
       email,
-      password: hashed,
+      password,
       username,
       address,
       company,
@@ -106,23 +146,91 @@ export const addUser = async (req: Request, res: Response): Promise<void> => {
       whatsapp,
       country,
       currency,
+      sequenceId, // El sequenceId recibido desde el frontend
       role,
       package: userPackage,
-      sequenceId,
-    }) as Document<unknown, {}, IUser> & IUser & { _id: string };
+    } = req.body || {};
 
-    const emailSent = await sendEmailVerify(newUser._id);
-    if (emailSent) {
-      res.status(201).json({ message: "Usuario registrado. Verifique su correo.", user: newUser });
-    } else {
-      throw new Error("Error al enviar correo de verificación");
+    const emailNorm = String(email || "")
+      .trim()
+      .toLowerCase();
+    if (!emailNorm) {
+      res.status(400).json({ message: "Correo no válido" });
+      return;
+    }
+
+    // Verificar si el correo ya está registrado
+    const exists = await User.exists({ email: emailNorm });
+    if (exists) {
+      res.status(409).json({ message: "Este correo ya está registrado" });
+      return;
+    }
+
+    // Hashear la contraseña
+    const hashed = await bcrypt.hash(String(password || ""), 10);
+
+    try {
+      // Crear el nuevo usuario con el sequenceId proporcionado
+      const newUser = await User.create({
+        name,
+        surname,
+        birthday,
+        email: emailNorm,
+        password: hashed,
+        username,
+        address,
+        company,
+        contactNumber,
+        whatsapp,
+        country,
+        currency,
+        role,
+        package: userPackage,
+        verifiedAt: new Date(), // Verificado directamente
+        sequenceId: sequenceId, // Usar el sequenceId proporcionado por el frontend
+      });
+
+      // Crear el token de sesión
+      const payload = {
+        id: String(newUser._id),
+        email: newUser.email,
+        username: newUser.username,
+      };
+      const token = jwt.sign(payload, secret, { expiresIn: "24h" });
+
+      // Configurar la cookie con el token
+      res.cookie("token", token, {
+        httpOnly: true,
+        secure: false,
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+
+      res.status(201).json({
+        message: "Usuario registrado correctamente",
+        user: newUser,
+      });
+    } catch (err: any) {
+      if (err?.code === 11000 && err?.keyPattern && err.keyPattern.sequenceId) {
+        res
+          .status(409)
+          .json({
+            message: "Duplicado en índice único (sequenceId). Reintente.",
+          });
+        return;
+      }
+      res
+        .status(500)
+        .json({
+          message: "Error al registrar usuario",
+          error: err?.message || String(err),
+        });
     }
   } catch (error: any) {
-    res.status(500).json({ message: "Error al registrar usuario", error: error.message });
-    console.log(error);
+    res
+      .status(500)
+      .json({ message: "Error al registrar usuario", error: error.message });
   }
 };
-
 export const logout = (req: Request, res: Response): void => {
   res.clearCookie("token", {
     httpOnly: true,
@@ -132,8 +240,30 @@ export const logout = (req: Request, res: Response): void => {
   res.status(200).json({ message: "Sesión cerrada correctamente" });
 };
 
+export const getSequenceIds = async (
+  _req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    // Encuentra el sequenceId más grande en la colección de usuarios
+    const maxSequenceUser = await User.findOne()
+      .sort({ sequenceId: -1 })
+      .select("sequenceId")
+      .lean();
+    const maxSequenceId = maxSequenceUser?.sequenceId || 10000; // Si no hay usuarios, empieza en 10000
+    const nextSequenceId = maxSequenceId + 1;
+
+    res.status(200).json({ sequenceId: nextSequenceId });
+  } catch (error: any) {
+    res
+      .status(500)
+      .json({
+        message: "Error al obtener el sequenceId",
+        error: error.message,
+      });
+  }
+};
 export const getSession = (req: AuthenticatedRequest, res: Response): void => {
-  // Toma el token de cookie o de Authorization: Bearer
   const bearer = req.headers.authorization?.startsWith("Bearer ")
     ? req.headers.authorization.split(" ")[1]
     : undefined;
@@ -145,97 +275,132 @@ export const getSession = (req: AuthenticatedRequest, res: Response): void => {
     return;
   }
 
-  jwt.verify(token, secret, async (err: jwt.VerifyErrors | null, decoded: any) => {
-    if (err) {
-      res.status(401).json({ message: "Token inválido", error: err });
-      return;
-    }
-
-    try {
-      // Preferir buscar por id del payload (más robusto). Fallback a email si no hay id.
-      const userId = decoded?.id as string | undefined;
-      const userEmail = decoded?.email as string | undefined;
-
-      let user = userId ? await User.findById(userId) : undefined;
-      if (!user && userEmail) {
-        user = await User.findOne({ email: userEmail });
-      }
-
-      if (!user) {
-        res.status(401).json({ message: "Usuario no encontrado" });
+  jwt.verify(
+    token,
+    secret,
+    async (err: jwt.VerifyErrors | null, decoded: any) => {
+      if (err) {
+        res.status(401).json({ message: "Token inválido", error: err });
         return;
       }
 
-      // Saneamos: omitimos password, __v, email y surname (según pediste)
-      const raw = typeof (user as any).toObject === "function" ? (user as any).toObject() : user;
-      const {
-        password: _omitPassword,
-        __v: _omitV,
-        email: _omitEmail,      // omitido
-        surname: _omitSurname,  // omitido
-        ...rest
-      } = raw;
+      try {
+        const userId = decoded?.id as string | undefined;
+        const userEmail = decoded?.email as string | undefined;
 
-      // Normalizamos _id a string
-      const idString = (user._id as Types.ObjectId).toString();
+        let user = userId ? await User.findById(userId) : undefined;
+        if (!user && userEmail) {
+          user = await User.findOne({ email: userEmail });
+        }
 
-      // Normalizamos birthday a ISO (si viene como Date); el resto queda tal cual
-      const birthdayISO =
-        rest?.birthday instanceof Date ? rest.birthday.toISOString() : rest?.birthday;
+        if (!user) {
+          res.status(401).json({ message: "Usuario no encontrado" });
+          return;
+        }
 
-      const userResponse = {
-        ...rest,               // name, address, company, contactNumber, whatsapp, country, currency, role, sequenceId, username, etc.
-        birthday: birthdayISO, // normalizado a ISO
-        _id: idString,         // string
-        id: idString,          // alias
-        clientId: idString,    // alias para el frontend
-      };
+        const raw =
+          typeof (user as any).toObject === "function"
+            ? (user as any).toObject()
+            : user;
+        const {
+          password: _omitPassword,
+          __v: _omitV,
+          email: _omitEmail,
+          surname: _omitSurname,
+          ...rest
+        } = raw;
 
-      res.status(200).json({
-        status: "exito",
-        id: (user._id as Types.ObjectId).toString(),
-        name: user.name,
-        apellido: user.surname,
-        email: user.email,
-        username: user.username,
-        user: userResponse,
-        token,              // si no lo quieres en la respuesta, puedes quitarlo
-        iat: decoded?.iat,  // tiempos del token
-        exp: decoded?.exp,
-      });
-    } catch (err: any) {
-      res.status(500).json({ message: "Error al obtener datos del usuario", error: err.message });
+        const idString = String(user._id);
+        const birthdayISO =
+          rest?.birthday instanceof Date
+            ? rest.birthday.toISOString()
+            : rest?.birthday;
+
+        const userResponse = {
+          ...rest,
+          birthday: birthdayISO,
+          _id: idString,
+          id: idString,
+          clientId: idString,
+        };
+
+        res.status(200).json({
+          status: "exito",
+          id: idString,
+          name: user.name,
+          apellido: user.surname,
+          email: user.email,
+          username: user.username,
+          user: userResponse,
+          token,
+          iat: decoded?.iat,
+          exp: decoded?.exp,
+        });
+      } catch (err: any) {
+        res
+          .status(500)
+          .json({
+            message: "Error al obtener datos del usuario",
+            error: err.message,
+          });
+      }
     }
-  });
+  );
 };
 
-export const VerifyUser = async (req: Request, res: Response): Promise<void> => {
+export const VerifyUser = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   const { id, code } = req.body;
   try {
-    if (!id || !code) throw new Error("Se requiere código OTP");
+    if (!id || !code) {
+      res
+        .status(400)
+        .json({ status: "failed", message: "Se requiere código OTP" });
+      return;
+    }
 
     const verifyCode = await UserOtp.findOne({ user_id: id });
-    if (!verifyCode) throw new Error("Código no encontrado o ya verificado");
+    if (!verifyCode) {
+      res
+        .status(400)
+        .json({
+          status: "failed",
+          message: "Código no encontrado o ya verificado",
+        });
+      return;
+    }
 
     const { expiresAt, otp } = verifyCode;
     if (expiresAt.getTime() < Date.now()) {
       await UserOtp.deleteMany({ user_id: id });
-      throw new Error("Código expirado. Solicite uno nuevo.");
+      res
+        .status(400)
+        .json({
+          status: "failed",
+          message: "Código expirado. Solicite uno nuevo.",
+        });
+      return;
     }
 
-    const validOtp = await bcrypt.compare(code.toString(), otp);
-    if (!validOtp) throw new Error("Código OTP inválido");
+    const validOtp = await bcrypt.compare(String(code), otp);
+    if (!validOtp) {
+      res
+        .status(400)
+        .json({ status: "failed", message: "Código OTP inválido" });
+      return;
+    }
 
     await User.updateOne({ _id: id }, { verifiedAt: Date.now() });
     await UserOtp.deleteMany({ user_id: id });
 
     const user = await User.findById(id);
-    
-    // CAMBIO AQUÍ: Incluir el ID del usuario en el payload del token
-    const payload = { 
-      id: (user?._id as Types.ObjectId).toString(),
-      email: user?.email, 
-      username: user?.username 
+
+    const payload = {
+      id: String(user?._id),
+      email: user?.email,
+      username: user?.username,
     };
     const token = jwt.sign(payload, secret, { expiresIn: "24h" });
 
@@ -245,7 +410,9 @@ export const VerifyUser = async (req: Request, res: Response): Promise<void> => 
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
-    res.status(200).json({ status: "Verified", message: "Correo verificado exitosamente" });
+    res
+      .status(200)
+      .json({ status: "Verified", message: "Correo verificado exitosamente" });
   } catch (e: any) {
     res.status(400).json({ status: "failed", message: e.message });
   }
@@ -254,20 +421,28 @@ export const VerifyUser = async (req: Request, res: Response): Promise<void> => 
 export const resendOtp = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.body;
   try {
-    if (!id) throw new Error("Id requerido");
+    if (!id) {
+      res.status(400).json({ message: "Id requerido" });
+      return;
+    }
 
     const user = await User.findOne({ _id: id, verifiedAt: null });
-    if (!user) throw new Error("Usuario no encontrado o ya verificado");
+    if (!user) {
+      res
+        .status(404)
+        .json({ message: "Usuario no encontrado o ya verificado" });
+      return;
+    }
 
     await UserOtp.deleteMany({ user_id: id });
 
-    const emailSent = await sendEmailVerify(id.toString());
+    const emailSent = await sendEmailVerify(String(id));
     if (emailSent) {
       res.status(200).json({ message: `Nuevo código enviado a ${user.email}` });
     } else {
-      throw new Error("No se pudo enviar el correo");
+      res.status(500).json({ message: "No se pudo enviar el correo" });
     }
   } catch (e: any) {
-    res.status(404).json({ message: e.message });
+    res.status(500).json({ message: e.message });
   }
 };

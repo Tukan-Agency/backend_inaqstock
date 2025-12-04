@@ -1,4 +1,3 @@
-// src/model/orderModel.ts
 import mongoose, { Document, Schema } from "mongoose";
 
 interface IOperationAction {
@@ -17,6 +16,7 @@ export interface IOrder extends Document {
   operationValue: number;
   isCapital: boolean;
   isWithdrawl: boolean;
+  isDemo: boolean; // ✅ Nuevo campo
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -70,6 +70,12 @@ const orderSchema = new Schema<IOrder>(
     isWithdrawl: {
       type: Boolean,
       default: false
+    },
+    // ✅ Nuevo campo para separar operaciones DEMO
+    isDemo: {
+      type: Boolean,
+      default: false,
+      index: true
     }
   },
   {

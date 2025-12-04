@@ -8,6 +8,7 @@ export interface IHistory extends Document {
   requestDate: Date;
   status: string;
   value: string;        // en old era string; mantenemos compat
+  isDemo: boolean;      // ✅ Nuevo campo
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -21,6 +22,12 @@ const historySchema = new Schema<IHistory>(
     requestDate: { type: Date, required: true },
     status: { type: String, required: true },
     value: { type: String, required: true },
+    // ✅ Nuevo campo para historial DEMO
+    isDemo: {
+      type: Boolean,
+      default: false,
+      index: true
+    }
   },
   { timestamps: true }
 );

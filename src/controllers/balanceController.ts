@@ -1,192 +1,125 @@
-// src/controllers/balanceController.ts
 import { Request, Response } from "express";
-import Order from "../model/orderModel";
 import { JwtPayload } from "jsonwebtoken";
+import Order from "../model/orderModel";
+import Position from "../model/positionModel";
 
 interface AuthenticatedRequest extends Request {
   user?: JwtPayload & { id: string };
 }
 
-interface IBalanceData {
-  balance: number;
-  capital: number;
-  ganancias: number;
-  margen: number;
+function n(v: any, d = 0) {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : d;
 }
+const r2 = (x: number) => Number(x.toFixed(2));
 
+/**
+ * Helper para calcular balances.
+ * CORRECCIÓN CRÍTICA: Para 'Real', buscamos documentos donde isDemo NO sea true
+ * (esto incluye false y undefined/null para soportar datos legacy).
+ */
+async function calculateBalanceForMode(userId: string, isDemoMode: boolean) {
+  // Si buscamos Demo, debe ser true. Si buscamos Real, cualquier cosa que NO sea true.
+  const queryFilter = isDemoMode ? { isDemo: true } : { isDemo: { $ne: true } };
+
+  // 1) Capital base
+  const capitalOrders = await Order.find({ 
+    clientId: userId, 
+    isCapital: true, 
+    ...queryFilter 
+  }).lean();
+
+  let depositos = 0;
+  let retiros = 0;
+  for (const o of capitalOrders) {
+    const actions = Array.isArray(o.operationActions) ? o.operationActions : [];
+    const totalActions = actions.reduce((acc, a) => acc + n(a.benefit) * n(a.quantity), 0);
+    if (o.isWithdrawl) retiros += totalActions;
+    else depositos += totalActions;
+  }
+
+  // 2) PnL realizado
+  const tradeOrders = await Order.find({
+    clientId: userId,
+    isCapital: false,
+    operationStatus: "Finalizado",
+    ...queryFilter
+  }).lean();
+  const pnlRealizado = tradeOrders.reduce((acc, o) => acc + n(o.operationValue), 0);
+
+  // 3) Posiciones abiertas
+  const openPositions = await Position.find({ 
+    userId, 
+    status: "open", 
+    ...queryFilter
+  }).lean();
+
+  let costoAbierto = 0;
+  let pnlAbierto = 0;
+  for (const p of openPositions) {
+    const vol = n(p.volume);
+    const open = n(p.openPrice);
+    const cur = n(p.currentPrice, open);
+    costoAbierto += vol * open;
+    if (p.type === "Compra") pnlAbierto += (cur - open) * vol;
+    else pnlAbierto += (open - cur) * vol;
+  }
+
+  // 4) Totales
+  const totalCapitalNeto = depositos - retiros + pnlRealizado;
+  const capitalDisponible = totalCapitalNeto - costoAbierto;
+  const equity = totalCapitalNeto + pnlAbierto;
+  const margen = pnlAbierto;
+  const ganancias = pnlRealizado;
+
+  return {
+    balance: r2(equity),
+    capital: r2(capitalDisponible),
+    ganancias: r2(ganancias),
+    margen: r2(margen),
+    margenReservado: r2(costoAbierto),
+    capitalLibre: r2(capitalDisponible),
+    puedeOperar: capitalDisponible > 0,
+    depositos: r2(depositos),
+    retiros: r2(retiros)
+  };
+}
 
 export const getUserBalances = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    if (!req.user) {
-      res.status(401).json({ message: "No autorizado" });
+    if (!req.user?.id) {
+      res.status(401).json({ success: false, message: "No autorizado" });
       return;
     }
-
     const userId = req.user.id;
 
-    // Obtener todas las órdenes del usuario
-    const orders = await Order.find({ 
-      clientId: userId,
-      operationStatus: 'Finalizado'
-    });
-
-    console.log(`📊 Calculando balances para usuario: ${userId}`);
-    console.log(`📋 Órdenes encontradas: ${orders.length}`);
-
-    // Inicializar valores
-    let balance = 0;
-    let totalCapital = 0;
-    let totalGanancia = 0;
-    let totalPerdida = 0;
-    let totalRetiros = 0;
-
-    // LÓGICA EXACTA DEL PROYECTO OLD
-    orders.forEach((order) => {
-      // 1. CALCULAR BALANCE (lógica original que ya funciona)
-      balance += order.operationValue;
-      order.operationActions.forEach((operation) => {
-        if (order.isCapital) {
-          balance += operation.benefit * operation.quantity;
-        }
-      });
-
-      // 2. CALCULAR x.total (benefit calculado por orden)
-      let totalBenefitOrden = 0;
-      order.operationActions.forEach((operation) => {
-        if (order.isCapital) {
-          totalBenefitOrden += operation.benefit * operation.quantity;
-        }
-      });
-
-      // 3. CALCULAR valorFinal (operationValue)
-      const valorFinal = order.operationValue;
-
-      // 4. APLICAR LÓGICA DEL generatePDF()
-      const isCapital = order.isCapital;
-      const isWithdrawl = order.isWithdrawl;
-
-      // CAPITAL: suma de totalBenefitOrden donde isCapital = true y NO es retiro
-      if (isCapital && !isWithdrawl) {
-        totalCapital += totalBenefitOrden;
-      }
-
-      // GANANCIAS Y PÉRDIDAS: solo si NO es retiro
-      if (!isWithdrawl) {
-        if (valorFinal > 0) {
-          totalGanancia += valorFinal;
-        } else if (valorFinal < 0) {
-          totalPerdida += Math.abs(valorFinal);
-        }
-      }
-
-      // RETIROS: suma de totalBenefitOrden donde isWithdrawl = true
-      if (isWithdrawl) {
-        totalRetiros += totalBenefitOrden;
-      }
-
-      console.log(`🔍 Orden ${order.operationNumber}:`, {
-        totalBenefitOrden,
-        valorFinal,
-        isCapital,
-        isWithdrawl
-      });
-    });
-
-    // MARGEN: ganancias - pérdidas
-    const margen = totalGanancia - totalPerdida;
-
-    console.log(`📊 Resultados finales:`, {
-      balance,
-      totalCapital,
-      totalGanancia,
-      totalPerdida,
-      totalRetiros,
-      margen
-    });
-
-    const balanceData: IBalanceData = {
-      balance: Number(balance.toFixed(2)),
-      capital: Number(totalCapital.toFixed(2)),
-      ganancias: Number(totalGanancia.toFixed(2)),
-      margen: Number(margen.toFixed(2))
-    };
+    const [real, demo] = await Promise.all([
+      calculateBalanceForMode(userId, false),
+      calculateBalanceForMode(userId, true)
+    ]);
 
     res.status(200).json({
       success: true,
-      data: balanceData
+      data: {
+        real,
+        demo,
+        ...real // Fallback para compatibilidad
+      },
     });
-
   } catch (error: any) {
-    console.error('Error calculating balances:', error);
+    console.error("Error calculating balances:", error);
     res.status(500).json({
       success: false,
       message: "Error al calcular balances",
-      error: error.message
+      error: error.message,
     });
   }
 };
 
 export const getBalancePreferences = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    if (!req.user) {
-      res.status(401).json({ message: "No autorizado" });
-      return;
-    }
-
-    // Por ahora retornamos las preferencias por defecto
-    // Después se puede integrar con el modelo User
-    res.status(200).json({
-      success: true,
-      data: {
-        preferences: ['balance'] // Valor por defecto
-      }
-    });
-
-  } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: "Error al obtener preferencias",
-      error: error.message
-    });
-  }
+  res.status(200).json({ success: true, data: { preferences: ["balance"] } });
 };
 
-// Actualizar preferencias de balance
 export const updateBalancePreferences = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    if (!req.user) {
-      res.status(401).json({ message: "No autorizado" });
-      return;
-    }
-
-    const { preferences } = req.body;
-
-    // Validar preferencias
-    const validPreferences = ['balance', 'capital', 'ganancias', 'margen'];
-    const isValid = Array.isArray(preferences) && 
-                   preferences.every((pref: string) => validPreferences.includes(pref));
-
-    if (!isValid) {
-      res.status(400).json({
-        success: false,
-        message: "Preferencias inválidas"
-      });
-      return;
-    }
-
-    // Por ahora solo confirmamos que se recibieron
-    // Después se puede guardar en el modelo User
-    res.status(200).json({
-      success: true,
-      message: "Preferencias actualizadas correctamente",
-      data: { preferences }
-    });
-
-  } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: "Error al actualizar preferencias",
-      error: error.message
-    });
-  }
+  res.status(200).json({ success: true, message: "OK" });
 };
