@@ -4,51 +4,89 @@ type PricePoint = {
   symbol: string;
   price: number;
   ts: number;
-  source: "rest" | "stub";
+  source: "polygon";
 };
 
 const lastPriceMap = new Map<string, PricePoint>();
 
 function isValidSymbol(symbol?: string): symbol is string {
   if (!symbol) return false;
-  // Para stocks / options simple: letras y . (ej: BRK.B)
-  return /^[A-Z0-9\.]{1,15}$/.test(symbol);
+  // Permitir : para crypto (ej: X:BTCUSD) y . para stocks (ej: BRK.B)
+  return /^[A-Z0-9\.\:]{1,20}$/.test(symbol);
 }
 
-function nextStubPrice(symbol: string): PricePoint {
-  const prev = lastPriceMap.get(symbol);
-  const base = prev?.price ?? 100 + Math.random() * 1000;
-  const delta = (Math.random() - 0.5) * (base * 0.002);
-  const price = Math.max(0.01, base + delta);
-  const point: PricePoint = { symbol, price: Number(price.toFixed(2)), ts: Date.now(), source: "stub" };
-  lastPriceMap.set(symbol, point);
-  return point;
+async function fetchPolygonPrice(symbol: string): Promise<PricePoint | null> {
+  const apiKey = process.env.POLYGON_API_KEY;
+  if (!apiKey) throw new Error("POLYGON_API_KEY not set");
+
+  const isCrypto = symbol.includes(":");
+  let url: string;
+  if (isCrypto) {
+    // Crypto: last trade
+    url = `https://api.polygon.io/v2/last/trade/${symbol}?apiKey=${apiKey}`;
+  } else {
+    // Stock: previous day aggregate (close price)
+    url = `https://api.polygon.io/v2/aggs/ticker/${symbol}/prev?apiKey=${apiKey}`;
+  }
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Polygon API error: ${res.status}`);
+
+  const data = await res.json();
+  if (isCrypto) {
+    if (!data.results || !data.results.p) return null;
+    return {
+      symbol,
+      price: Number(data.results.p),
+      ts: data.results.t,
+      source: "polygon",
+    };
+  } else {
+    if (!data.results || data.results.length === 0 || !data.results[0].c) return null;
+    return {
+      symbol,
+      price: Number(data.results[0].c),
+      ts: data.results[0].t,
+      source: "polygon",
+    };
+  }
 }
 
-// GET /api/prices/last?symbol=AAPL
+// GET /api/prices/last?symbol=AAPL o X:BTCUSD
 export async function getLastPrice(req: Request, res: Response) {
   const symbol = String(req.query.symbol || "").trim().toUpperCase();
   if (!isValidSymbol(symbol)) {
-    res.status(400).json({ ok: false, message: "Símbolo inválido." });
+    res.status(400).json({ ok: false, message: "Símbolo inválido. Ejemplo: AAPL o X:BTCUSD" });
     return;
   }
+
   try {
-    // Aquí podrías llamar una API de últimos trades si la tuvieras
-    const point = nextStubPrice(symbol); // stub directo (no dependencia externa)
+    const point = await fetchPolygonPrice(symbol);
+    if (!point) {
+      res.status(404).json({ ok: false, message: "No data from Polygon" });
+      return;
+    }
+    lastPriceMap.set(symbol, point);
     res.json({ ok: true, data: point });
   } catch (e: any) {
-    const point = nextStubPrice(symbol);
-    res.status(200).json({ ok: true, data: point, warning: e?.message || "fallback stub" });
+    // Fallback to cached
+    const cached = lastPriceMap.get(symbol);
+    if (cached) {
+      res.json({ ok: true, data: cached, warning: e?.message || "fallback cached" });
+    } else {
+      res.status(500).json({ ok: false, message: e?.message || "Error fetching price" });
+    }
   }
 }
 
-// SSE /api/prices/stream?symbol=AAPL
+// SSE /api/prices/stream?symbol=AAPL o X:BTCUSD
 export async function streamLivePriceSSE(req: Request, res: Response) {
   const symbol = String(req.query.symbol || "").trim().toUpperCase();
   if (!isValidSymbol(symbol)) {
-    res.status(400).json({ ok: false, message: "Símbolo inválido." });
+    res.status(400).json({ ok: false, message: "Símbolo inválido. Ejemplo: AAPL o X:BTCUSD" });
     return;
   }
+
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -57,21 +95,31 @@ export async function streamLivePriceSSE(req: Request, res: Response) {
   let alive = true;
   req.on("close", () => { alive = false; });
 
-  const first = nextStubPrice(symbol);
-  try {
-    res.write(`data: ${JSON.stringify({ type: "price", ...first })}\n\n`);
-  } catch {}
+  // Enviar precio inicial
+  const initial = await fetchPolygonPrice(symbol).catch(() => lastPriceMap.get(symbol));
+  if (initial) {
+    res.write(`data: ${JSON.stringify({ type: "price", ...initial })}\n\n`);
+  }
 
-  const id = setInterval(() => {
+  // Polling cada 10s para stocks (día no cambia rápido), 2s para crypto
+  const interval = symbol.includes(":") ? 2000 : 10000;
+  const id = setInterval(async () => {
     if (!alive) {
       clearInterval(id);
       return;
     }
-    const p = nextStubPrice(symbol);
     try {
-      res.write(`data: ${JSON.stringify({ type: "price", ...p })}\n\n`);
+      const p = await fetchPolygonPrice(symbol);
+      if (p) {
+        lastPriceMap.set(symbol, p);
+        res.write(`data: ${JSON.stringify({ type: "price", ...p })}\n\n`);
+      }
     } catch {
-      clearInterval(id);
+      // Mantener vivo sin error
     }
-  }, 2000);
+  }, interval);
+
+  req.on("close", () => {
+    clearInterval(id);
+  });
 }
