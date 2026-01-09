@@ -33,6 +33,8 @@ export interface IUser extends Document {
   sequenceId: number;
   cuenta_verify: boolean; // ✅ nuevo campo
   verifiedAt?: Date | null;
+  resetToken?: string;
+  resetTokenExpiry?: number; // Usamos number para Date.now()
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -63,14 +65,15 @@ const userSchema = new Schema<IUser>(
     },
     sequenceId: {
       type: Number,
-      unique: true,   // único
-      sparse: true,   // MUY IMPORTANTE para permitir documentos sin sequenceId
-      required: false // ya no es requerido
+      unique: true, // único
+      sparse: true, // MUY IMPORTANTE para permitir documentos sin sequenceId
+      required: false, // ya no es requerido
     },
 
     // ✅ Campo nuevo
     cuenta_verify: { type: Boolean, default: false },
-
+    resetToken: { type: String, required: false },
+    resetTokenExpiry: { type: Number, required: false },
   },
   {
     timestamps: true,

@@ -19,6 +19,8 @@ import requestRouter from "./routes/requestRouter";
 import priceRouter from "./routes/priceRouter";
 import { UPLOADS_DIR } from "./config/paths";
 import demoRouter from "./routes/demoRouter";
+import settingsRouter from "./routes/settingsRouter"; 
+
 
 dotenv.config();
 
@@ -88,6 +90,8 @@ app.use("/api/verification", verificationRouter);
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/prices", priceRouter);
 app.use("/api/demo", demoRouter);
+app.use("/api/settings", settingsRouter);
+
 
 app.set("port", process.env.PORT || 3000);
 app.set("view engine", "ejs");

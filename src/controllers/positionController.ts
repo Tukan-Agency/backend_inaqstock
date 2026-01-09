@@ -143,7 +143,8 @@ export const closePosition = async (req: AuthenticatedRequest, res: Response): P
       operationValue: pnl,
       isCapital: false,
       isWithdrawl: pnl < 0,
-      isDemo: position.isDemo, // ✅ Hereda flag demo
+      isDemo: position.isDemo,
+      symbol: position.symbol, // ✅ CORRECCIÓN: Guardamos el símbolo aquí
       operationActions: [],
     });
     await tradeOrder.save();
@@ -158,7 +159,7 @@ export const closePosition = async (req: AuthenticatedRequest, res: Response): P
         requestDate: position.closeTime,
         status: "Finalizado",
         value: String(Math.abs(pnl)),
-        isDemo: position.isDemo // ✅ Hereda flag demo
+        isDemo: position.isDemo
       });
       await movement.save();
     }
@@ -238,9 +239,6 @@ export const updatePositionPrice = async (req: AuthenticatedRequest, res: Respon
       position.currentPrice = p;
       position.calculateProfit();
       await position.save();
-      // Nota: Aquí NO emitimos socket de balance porque el precio cambia 
-      // miles de veces por segundo. El balance "flotante" se calcula 
-      // en el front o se pide bajo demanda.
     }
     res.status(200).json(position);
   } catch (error: any) {

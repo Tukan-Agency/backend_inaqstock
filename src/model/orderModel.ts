@@ -16,7 +16,8 @@ export interface IOrder extends Document {
   operationValue: number;
   isCapital: boolean;
   isWithdrawl: boolean;
-  isDemo: boolean; // ✅ Nuevo campo
+  isDemo: boolean;
+  symbol?: string; // ✅ Nuevo campo agregado a la interfaz
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -71,11 +72,15 @@ const orderSchema = new Schema<IOrder>(
       type: Boolean,
       default: false
     },
-    // ✅ Nuevo campo para separar operaciones DEMO
     isDemo: {
       type: Boolean,
       default: false,
       index: true
+    },
+    // ✅ Nuevo campo agregado al esquema
+    symbol: {
+      type: String,
+      required: false
     }
   },
   {

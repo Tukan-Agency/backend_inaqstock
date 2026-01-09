@@ -52,12 +52,14 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       username: user.username,
       surname: user.surname,
     };
-    const token = jwt.sign(payload, secret, { expiresIn: "1h" });
+    const token = jwt.sign(payload, secret, { expiresIn: "8h" });
 
     res.cookie("token", token, {
       httpOnly: true,
       secure: false,
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      // Opcional: Ajusta también la duración de la cookie para que coincida (en milisegundos)
+      // Ejemplo para 8 horas: 8 * 60 * 60 * 1000
+      maxAge: 8 * 60 * 60 * 1000, 
     });
 
     res.status(200).json({ status: "exito", message: "Ingreso exitoso", user });
