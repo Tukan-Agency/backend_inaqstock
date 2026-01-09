@@ -20,7 +20,7 @@ const server = app.listen(app.get("port"), () => {
 ███████╗██║╚██████╔╝██║ ╚████║███████║╚██████╔╝██║        ██║   
 ╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═╝        ╚═╝   
 
-Powered by: LIONSOFT
+Powered by: LIONSOFT  CON CAMBIOS
 `);
   console.log("Aplicación en http://localhost:%d (%s)", app.get("port"), app.get("env"));
 });
