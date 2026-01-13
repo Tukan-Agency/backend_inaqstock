@@ -20,6 +20,8 @@ import priceRouter from "./routes/priceRouter";
 import { UPLOADS_DIR } from "./config/paths";
 import demoRouter from "./routes/demoRouter";
 import settingsRouter from "./routes/settingsRouter"; 
+import aiRouter from "./routes/aiRouter";
+
 
 
 dotenv.config();
@@ -78,6 +80,7 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use("/api/ai", aiRouter);
 app.use("/api/auth", authRouter);
 app.use("/api/users", userRoutes);
 app.use("/api/positions", positionRouter);
