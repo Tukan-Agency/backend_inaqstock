@@ -25,7 +25,7 @@ export const sendRecoveryEmail = async (email: string, token: string) => {
     const settings = getSettings();
     // Prioridad: settings.json -> variable de entorno -> string vacío
     const apiKey = settings.resendApiKey || process.env.RESEND_API_KEY; 
-    const platformName = settings.platformTitle || "InaqStock";
+    const platformName = settings.platformTitle || "Nydaqstock";
 
     if (!apiKey) {
       console.log("Falta la API Key de Resend. Verifica settings.json o .env");

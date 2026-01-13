@@ -52,14 +52,17 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       username: user.username,
       surname: user.surname,
     };
-    const token = jwt.sign(payload, secret, { expiresIn: "8h" });
-
+   const token = jwt.sign(payload, secret, { expiresIn: "8h" });   
+   // const token = jwt.sign(payload, secret, { expiresIn: "1m" }); // 1 minuto
+ 
     res.cookie("token", token, {
       httpOnly: true,
       secure: false,
       // Opcional: Ajusta también la duración de la cookie para que coincida (en milisegundos)
       // Ejemplo para 8 horas: 8 * 60 * 60 * 1000
       maxAge: 8 * 60 * 60 * 1000, 
+     // maxAge: 1 * 60 * 1000, // 1 minuto en milisegundos
+
     });
 
     res.status(200).json({ status: "exito", message: "Ingreso exitoso", user });
