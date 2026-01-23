@@ -5,6 +5,10 @@ type PricePoint = {
   price: number;
   ts: number;
   source: "polygon";
+  // NUEVO: para mostrar % como “+0.13%”
+  prevClose?: number;
+  change?: number;
+  changePercent?: number;
 };
 
 const lastPriceMap = new Map<string, PricePoint>();
@@ -15,41 +19,133 @@ function isValidSymbol(symbol?: string): symbol is string {
   return /^[A-Z0-9\.\:]{1,20}$/.test(symbol);
 }
 
+function safeUrlWithoutKey(url: string) {
+  return url.replace(/apiKey=[^&]+/gi, "apiKey=***");
+}
+
+async function fetchJson(url: string): Promise<{ ok: boolean; status: number; json: any; text: string }> {
+  const res = await fetch(url);
+  const status = res.status;
+  const text = await res.text();
+  let json: any = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = null;
+  }
+  return { ok: res.ok, status, json, text };
+}
+
+// STOCKS: Snapshot (last trade + prevDay close)
+async function fetchPolygonStockSnapshot(symbol: string, apiKey: string): Promise<PricePoint | null> {
+  // Ej: https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/AAPL?apiKey=...
+  const url = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${encodeURIComponent(
+    symbol
+  )}?apiKey=${encodeURIComponent(apiKey)}`;
+
+  const started = Date.now();
+  const r = await fetchJson(url);
+  const tookMs = Date.now() - started;
+
+  if (!r.ok) {
+    console.error(
+      `[prices][snapshot] error symbol=${symbol} status=${r.status} tookMs=${tookMs} url=${safeUrlWithoutKey(url)} body=${(r.text || "")
+        .slice(0, 400)}`
+    );
+    throw new Error(`Polygon snapshot error: ${r.status}`);
+  }
+
+  const data = r.json;
+  const ticker = data?.ticker;
+
+  // Snapshot shape (Polygon):
+  // ticker.lastTrade.p  (último trade)
+  // ticker.day.c        (close del día actual, puede existir)
+  // ticker.prevDay.c    (close del día anterior)
+  const lastTradePrice =
+    Number(ticker?.lastTrade?.p) ||
+    Number(ticker?.lastQuote?.P) || // por si viene quote
+    Number(ticker?.day?.c) || // fallback
+    NaN;
+
+  const prevClose = Number(ticker?.prevDay?.c);
+  const ts =
+    Number(ticker?.lastTrade?.t) ||
+    Number(ticker?.lastQuote?.t) ||
+    Date.now();
+
+  if (!Number.isFinite(lastTradePrice) || lastTradePrice <= 0) {
+    console.warn(
+      `[prices][snapshot] no_last_price symbol=${symbol} tookMs=${tookMs} sample=${JSON.stringify(data)?.slice(0, 400)}`
+    );
+    return null;
+  }
+
+  let change: number | undefined = undefined;
+  let changePercent: number | undefined = undefined;
+  if (Number.isFinite(prevClose) && prevClose > 0) {
+    change = lastTradePrice - prevClose;
+    changePercent = (change / prevClose) * 100;
+  }
+
+  console.log(
+    `[prices][snapshot] ok symbol=${symbol} tookMs=${tookMs} last=${lastTradePrice} prevClose=${Number.isFinite(prevClose) ? prevClose : "NA"}`
+  );
+
+  return {
+    symbol,
+    price: Number(lastTradePrice),
+    ts: Number(ts) || Date.now(),
+    source: "polygon",
+    prevClose: Number.isFinite(prevClose) ? Number(prevClose) : undefined,
+    change: Number.isFinite(change as number) ? Number(change) : undefined,
+    changePercent: Number.isFinite(changePercent as number) ? Number(changePercent) : undefined,
+  };
+}
+
+// CRYPTO: se deja como estaba (pero tu endpoint original aquí es dudoso para crypto).
+async function fetchPolygonCryptoLikeBefore(symbol: string, apiKey: string): Promise<PricePoint | null> {
+  const url = `https://api.polygon.io/v2/last/trade/${symbol}?apiKey=${encodeURIComponent(apiKey)}`;
+
+  const started = Date.now();
+  const r = await fetchJson(url);
+  const tookMs = Date.now() - started;
+
+  if (!r.ok) {
+    console.error(
+      `[prices][crypto] error symbol=${symbol} status=${r.status} tookMs=${tookMs} url=${safeUrlWithoutKey(url)} body=${(r.text || "")
+        .slice(0, 400)}`
+    );
+    throw new Error(`Polygon API error: ${r.status}`);
+  }
+
+  const data = r.json;
+  const p = Number(data?.results?.p);
+  const t = Number(data?.results?.t);
+
+  if (!Number.isFinite(p)) return null;
+
+  return {
+    symbol,
+    price: p,
+    ts: Number.isFinite(t) ? t : Date.now(),
+    source: "polygon",
+  };
+}
+
 async function fetchPolygonPrice(symbol: string): Promise<PricePoint | null> {
   const apiKey = process.env.POLYGON_API_KEY;
   if (!apiKey) throw new Error("POLYGON_API_KEY not set");
 
   const isCrypto = symbol.includes(":");
-  let url: string;
+
   if (isCrypto) {
-    // Crypto: last trade
-    url = `https://api.polygon.io/v2/last/trade/${symbol}?apiKey=${apiKey}`;
-  } else {
-    // Stock: previous day aggregate (close price)
-    url = `https://api.polygon.io/v2/aggs/ticker/${symbol}/prev?apiKey=${apiKey}`;
+    // crypto (como antes)
+    return fetchPolygonCryptoLikeBefore(symbol, apiKey);
   }
 
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Polygon API error: ${res.status}`);
-
-  const data = await res.json();
-  if (isCrypto) {
-    if (!data.results || !data.results.p) return null;
-    return {
-      symbol,
-      price: Number(data.results.p),
-      ts: data.results.t,
-      source: "polygon",
-    };
-  } else {
-    if (!data.results || data.results.length === 0 || !data.results[0].c) return null;
-    return {
-      symbol,
-      price: Number(data.results[0].c),
-      ts: data.results[0].t,
-      source: "polygon",
-    };
-  }
+  // stocks live snapshot
+  return fetchPolygonStockSnapshot(symbol, apiKey);
 }
 
 // GET /api/prices/last?symbol=AAPL o X:BTCUSD
@@ -69,7 +165,6 @@ export async function getLastPrice(req: Request, res: Response) {
     lastPriceMap.set(symbol, point);
     res.json({ ok: true, data: point });
   } catch (e: any) {
-    // Fallback to cached
     const cached = lastPriceMap.get(symbol);
     if (cached) {
       res.json({ ok: true, data: cached, warning: e?.message || "fallback cached" });
@@ -93,16 +188,16 @@ export async function streamLivePriceSSE(req: Request, res: Response) {
   res.flushHeaders?.();
 
   let alive = true;
-  req.on("close", () => { alive = false; });
+  req.on("close", () => {
+    alive = false;
+  });
 
-  // Enviar precio inicial
   const initial = await fetchPolygonPrice(symbol).catch(() => lastPriceMap.get(symbol));
   if (initial) {
     res.write(`data: ${JSON.stringify({ type: "price", ...initial })}\n\n`);
   }
 
-  // Polling cada 10s para stocks (día no cambia rápido), 2s para crypto
-  const interval = symbol.includes(":") ? 2000 : 10000;
+  const interval = symbol.includes(":") ? 2000 : 2000; // stocks también cada 2s para ver cambios
   const id = setInterval(async () => {
     if (!alive) {
       clearInterval(id);
@@ -115,7 +210,7 @@ export async function streamLivePriceSSE(req: Request, res: Response) {
         res.write(`data: ${JSON.stringify({ type: "price", ...p })}\n\n`);
       }
     } catch {
-      // Mantener vivo sin error
+      // mantener vivo
     }
   }, interval);
 
