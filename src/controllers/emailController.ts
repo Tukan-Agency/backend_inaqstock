@@ -1,7 +1,6 @@
 import bcrypt from "bcrypt";
 import dotenv from "dotenv";
-import sendEmail from "../config/email/email";
-import renderHtml from "../config/email/template";
+import { sendVerificationEmail } from "../utils/emailSender";
 import UserOtp from "../model/userOtp";
 import User from "../model/userModel";
 
@@ -21,27 +20,47 @@ export async function sendEmailVerify(user_id: string): Promise<boolean> {
       throw new Error("User not found");
     }
 
+    // Guardar el OTP en la base de datos
     await UserOtp.create({
       user_id: newUser._id,
       otp: hashedOtp,
       expiresAt: new Date(Date.now() + 3600 * 1000), // 1 hora de expiración
     });
 
-    const from = process.env.EMAIL_FROM;
-    if (!from) throw new Error("EMAIL_FROM not defined in environment");
-
-    const to = newUser.email;
-    const subject = "Welcome to Auth App 💻";
-    const text = "Verify your account"; // opcional, pero útil
-    const username = newUser.username;
-    const html = await renderHtml(code, username, from);
-
     console.log("Verification code:", code);
 
-   // await sendEmail({ to, from, subject,  html });
+    // Enviar email usando el nuevo servicio SMTP
+    const emailSent = await sendVerificationEmail(
+      newUser.email,
+      newUser.username,
+      code
+    );
+
+    if (!emailSent) {
+      throw new Error("Failed to send verification email");
+    }
+
     return true;
   } catch (e) {
     console.error("Failed to send verification email:", e);
     return false;
   }
 }
+
+// Opcional: Función para probar la conexión SMTP
+export const testEmailService = async () => {
+  try {
+    const { testSMTPConnection } = await import("../utils/emailSender");
+    const isConnected = await testSMTPConnection();
+    return { success: isConnected };
+  } catch (error) {
+    console.error("Error testing email service:", error);
+    
+    // CORRECCIÓN: Hacer type assertion para acceder a message
+    if (error instanceof Error) {
+      return { success: false, error: error.message };
+    } else {
+      return { success: false, error: String(error) };
+    }
+  }
+};
