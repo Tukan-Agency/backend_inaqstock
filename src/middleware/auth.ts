@@ -21,7 +21,11 @@ async function authenticate(
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  const token = req.cookies?.token;
+  // Buscar token en Cookie O Header
+  const bearer = req.headers.authorization?.startsWith("Bearer ")
+    ? req.headers.authorization.split(" ")[1]
+    : undefined;
+  const token = req.cookies?.token || bearer;
 
   if (!token) {
     res.status(401).json({ message: "No Token" });
@@ -31,14 +35,21 @@ async function authenticate(
   try {
     const decoded = jwt.verify(token, secret) as JwtPayload;
     
-    // Buscar el usuario para obtener su ID
-    const user = await User.findOne({ email: decoded.email });
+    // CORRECCIÓN CRÍTICA: Buscar por ID, no por email.
+    let user = null;
+    if (decoded.id) {
+        user = await User.findById(decoded.id);
+    } else if (decoded.email) {
+        // Fallback
+        user = await User.findOne({ email: decoded.email });
+    }
+
     if (!user) {
       res.status(401).json({ message: "Usuario no encontrado" });
       return;
     }
 
-    // Agregar el ID del usuario al objeto user con el tipado correcto
+    // Inyectar usuario en la request
     req.user = {
       ...decoded,
       id: (user._id as Types.ObjectId).toString()

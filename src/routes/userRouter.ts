@@ -8,22 +8,26 @@ import {
   updateUserAdmin,
   deleteUserAdmin
 } from "../controllers/userController";
-
-// Si tienes middlewares de authenticate / requireAdmin, puedes colocarlos en las rutas /admin
-// import authenticate from "../middleware/auth";
+import authenticate from "../middleware/auth"; // <--- IMPORTANTE: Descomenta o agrega esto
 // import requireAdmin from "../middleware/requireAdmin";
 
 const router = Router();
 
-// Self
-router.put("/me", updateMe);
-router.post("/me/password", changeMyPassword);
-router.post("/check-email", checkEmailAvailability);
-router.put("/:id/toggle-verify", toggleCuentaVerifyUser);
+// Self (Rutas protegidas para el usuario logueado)
+router.put("/me", authenticate, updateMe); // <--- AGREGAR authenticate
+router.post("/me/password", authenticate, changeMyPassword); // <--- AGREGAR authenticate
+router.post("/check-email", checkEmailAvailability); // Esta puede ser pública
+router.put("/:id/toggle-verify", authenticate, toggleCuentaVerifyUser); // <--- AGREGAR authenticate
 
-// Admin (puedes proteger con authenticate, requireAdmin)
-router.get("/admin", /*authenticate, requireAdmin,*/ getAllUsersAdmin);
-router.put("/admin/:id", /*authenticate, requireAdmin,*/ updateUserAdmin);
-router.delete("/admin/:id", /*authenticate, requireAdmin,*/ deleteUserAdmin);
+// Admin
+// router.get("/admin", authenticate, requireAdmin, getAllUsersAdmin);
+// router.put("/admin/:id", authenticate, requireAdmin, updateUserAdmin);
+// router.delete("/admin/:id", authenticate, requireAdmin, deleteUserAdmin);
+
+// Mantenemos las de admin como las tenías si no quieres tocar esa parte aún,
+// pero idealmente también deberían llevar 'authenticate'.
+router.get("/admin", getAllUsersAdmin);
+router.put("/admin/:id", updateUserAdmin);
+router.delete("/admin/:id", deleteUserAdmin);
 
 export default router;

@@ -3,17 +3,40 @@ import bcrypt from "bcrypt";
 import jwt, { type Secret, type JwtPayload } from "jsonwebtoken";
 import { Types } from "mongoose";
 import User from "../model/userModel";
-import { purgeUserCache } from "../controllers/services/userService"; // <- añade este import
+import { purgeUserCache } from "../controllers/services/userService"; 
 
+// Interfaz para TS
+interface AuthenticatedRequest extends Request {
+  user?: JwtPayload & { id: string };
+}
 
-// FIX Tipos: garantiza que el secreto JWT sea de tipo Secret (no string | undefined)
 const JWT_SECRET: Secret = (() => {
   const s = process.env.AUTH_SECRET;
   if (!s) throw new Error("AUTH_SECRET not defined in environment variables.");
   return s;
 })();
 
-// Helpers locales (sin tocar otros archivos)
+// HELPER: RENOVAR SESIÓN
+const refreshUserSession = (res: Response, user: any) => {
+  const tokenPayload = {
+    id: String(user._id),
+    email: user.email,
+    username: user.username,
+    surname: user.surname,
+  };
+
+  const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: "8h" }); 
+
+  res.cookie("token", token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    maxAge: 8 * 60 * 60 * 1000, 
+  });
+
+  return token;
+};
+
+// Helper legacy (lo mantenemos por si acaso se usa en otro lado)
 function getTokenFromReq(req: Request): string | undefined {
   const bearer = req.headers.authorization?.startsWith("Bearer ")
     ? req.headers.authorization.split(" ")[1]
@@ -21,6 +44,7 @@ function getTokenFromReq(req: Request): string | undefined {
   return req.cookies?.token || bearer;
 }
 
+// Helper legacy
 function getUserIdFromReq(req: Request): string | null {
   const token = getTokenFromReq(req);
   if (!token) return null;
@@ -32,27 +56,17 @@ function getUserIdFromReq(req: Request): string | null {
   }
 }
 
-/**
- * Admin: listar todos los usuarios
- * GET /api/users/admin
- */
+// --- FUNCIONES EXPORTADAS ---
+
 export async function getAllUsersAdmin(_req: Request, res: Response): Promise<void> {
   try {
     const users = await User.find({}).lean();
-    res.status(200).json({
-      ok: true,
-      users,
-    });
+    res.status(200).json({ ok: true, users });
   } catch (e: any) {
     res.status(500).json({ ok: false, message: e.message || "Error" });
   }
 }
 
-/**
- * Admin: actualizar un usuario por ID
- * PUT /api/users/admin/:id
- * Body parcial con los mismos campos de userModel (password opcional como newPassword)
- */
 export async function updateUserAdmin(req: Request, res: Response): Promise<void> {
   try {
     const { id } = req.params;
@@ -61,7 +75,6 @@ export async function updateUserAdmin(req: Request, res: Response): Promise<void
       birthday, country, currency, newPassword,
     } = req.body || {};
 
-    // Validar email único si cambia
     let $set: Record<string, any> = {};
     if (typeof name === "string") $set.name = name;
     if (typeof surname === "string") $set.surname = surname;
@@ -78,30 +91,20 @@ export async function updateUserAdmin(req: Request, res: Response): Promise<void
       $set.email = emailN;
     }
 
-    if (contactNumber !== undefined) {
-      const n = Number(contactNumber);
-      if (!Number.isNaN(n)) $set.contactNumber = n;
-    }
-    if (whatsapp !== undefined) {
-      const n = Number(whatsapp);
-      if (!Number.isNaN(n)) $set.whatsapp = n;
-    }
-    if (birthday) {
-      const d = new Date(birthday);
-      if (!Number.isNaN(d.getTime())) $set.birthday = d;
-    }
+    if (contactNumber !== undefined) $set.contactNumber = Number(contactNumber) || 0;
+    if (whatsapp !== undefined) $set.whatsapp = Number(whatsapp) || 0;
+    if (birthday) $set.birthday = new Date(birthday);
+    
     if (country && typeof country === "object") {
       $set["country.name"] = country.name;
       $set["country.code"] = country.code;
       $set["country.flag"] = country.flag;
     }
     if (currency && typeof currency === "object") {
-      // En el modelo nuevo solo existe currency.name
       const cname = currency.name ?? currency.code ?? currency;
       if (cname) $set["currency.name"] = cname;
     }
 
-    // Password opcional
     if (newPassword && String(newPassword).length >= 6) {
       $set.password = await bcrypt.hash(String(newPassword), 10);
     }
@@ -110,13 +113,14 @@ export async function updateUserAdmin(req: Request, res: Response): Promise<void
       id,
       { $set },
       { new: true, runValidators: true, context: "query" }
-    ).select("_id");
+    ).select("_id email");
 
     if (!updated) {
       res.status(404).json({ ok: false, message: "Usuario no encontrado" });
       return;
     }
 
+    await purgeUserCache({ id, email: updated.email }).catch(() => {});
     res.status(200).json({ ok: true, id: (updated._id as Types.ObjectId).toString() });
   } catch (e: any) {
     if (e?.name === "ValidationError") {
@@ -127,37 +131,21 @@ export async function updateUserAdmin(req: Request, res: Response): Promise<void
   }
 }
 
-/**
- * Admin: eliminar usuario por ID
- * DELETE /api/users/admin/:id
- */
- 
-
 export async function deleteUserAdmin(req: Request, res: Response): Promise<void> {
   try {
     const { id } = req.params;
-    // Traemos email para poder invalidar cache por email e id
     const deleted = await User.findByIdAndDelete(id).select("email");
     if (!deleted) {
       res.status(404).json({ ok: false, message: "Usuario no encontrado" });
       return;
     }
-
-    // Invalidate Redis keys (id y email)
-    await purgeUserCache({ id, email: deleted.email });
-
+    await purgeUserCache({ id, email: deleted.email }).catch(() => {});
     res.status(200).json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ ok: false, message: e.message || "Error" });
   }
 }
 
-/**
- * POST /api/users/check-email
- * Body: { email: string }
- * Respuesta: { exists: boolean, available: boolean, message: string }
- * - Si el email corresponde al del propio usuario autenticado, se devuelve available=true (no se considera conflicto).
- */
 export async function checkEmailAvailability(req: Request, res: Response): Promise<void> {
   try {
     const raw = req.body?.email ?? req.query?.email;
@@ -166,10 +154,7 @@ export async function checkEmailAvailability(req: Request, res: Response): Promi
       res.status(400).json({ exists: false, available: false, message: "Correo no válido" });
       return;
     }
-
     const currentUserId = getUserIdFromReq(req);
-
-    // ¿Existe algún usuario (distinto del actual) con ese correo?
     const existing = await User.findOne({ email }).select("_id email");
     const exists = !!existing && String(existing._id) !== String(currentUserId || "");
 
@@ -179,7 +164,7 @@ export async function checkEmailAvailability(req: Request, res: Response): Promi
       message: exists ? "Este correo ya está registrado" : "Correo disponible",
     });
   } catch (e: any) {
-    res.status(500).json({ exists: false, available: false, message: e.message || "Error al verificar el correo" });
+    res.status(500).json({ exists: false, available: false, message: e.message || "Error" });
   }
 }
 
@@ -188,11 +173,14 @@ export async function checkEmailAvailability(req: Request, res: Response): Promi
  */
 export async function updateMe(req: Request, res: Response): Promise<void> {
   try {
-    const userId = getUserIdFromReq(req);
-    if (!userId) {
+    // 1. OBTENER USUARIO DEL MIDDLEWARE
+    const userPayload = (req as AuthenticatedRequest).user;
+    
+    if (!userPayload || !userPayload.id) {
       res.status(401).json({ message: "No autenticado" });
       return;
     }
+    const userId = userPayload.id;
 
     const current = await User.findById(userId).select("_id email");
     if (!current) {
@@ -201,13 +189,7 @@ export async function updateMe(req: Request, res: Response): Promise<void> {
     }
 
     const {
-      name,
-      surname,
-      email: rawEmail,
-      address,
-      contactNumber,
-      whatsapp,
-      country,
+      name, surname, email: rawEmail, address, contactNumber, whatsapp, country,
     } = req.body || {};
 
     let emailToSet: string | undefined = undefined;
@@ -228,15 +210,8 @@ export async function updateMe(req: Request, res: Response): Promise<void> {
     if (typeof surname === "string") $set.surname = surname;
     if (typeof address === "string") $set.address = address;
     if (emailToSet !== undefined) $set.email = emailToSet;
-
-    if (contactNumber !== undefined) {
-      const n = Number(contactNumber);
-      if (!Number.isNaN(n)) $set.contactNumber = n;
-    }
-    if (whatsapp !== undefined) {
-      const n = Number(whatsapp);
-      if (!Number.isNaN(n)) $set.whatsapp = n;
-    }
+    if (contactNumber !== undefined) $set.contactNumber = Number(contactNumber) || 0;
+    if (whatsapp !== undefined) $set.whatsapp = Number(whatsapp) || 0;
     if (country && typeof country === "object") {
       $set["country.name"] = country.name;
       $set["country.code"] = country.code;
@@ -246,21 +221,24 @@ export async function updateMe(req: Request, res: Response): Promise<void> {
     const updated = await User.findByIdAndUpdate(
       userId,
       { $set },
-      {
-        new: true,
-        runValidators: true,
-        context: "query",
-      }
-    ).select("_id");
+      { new: true, runValidators: true, context: "query" }
+    );
 
     if (!updated) {
       res.status(404).json({ message: "Usuario no encontrado" });
       return;
     }
 
+    await purgeUserCache({ id: userId, email: current.email }).catch(() => {});
+
+    // 2. REFRESCAR SESIÓN
+    const token = refreshUserSession(res, updated);
+
     res.status(200).json({
       message: "Perfil actualizado",
       id: (updated._id as Types.ObjectId).toString(),
+      token, 
+      user: updated
     });
   } catch (e: any) {
     if (e?.name === "ValidationError") {
@@ -268,7 +246,6 @@ export async function updateMe(req: Request, res: Response): Promise<void> {
       return;
     }
     res.status(500).json({ message: "Error al actualizar perfil", error: e.message });
-    console.log(e);
   }
 }
 
@@ -277,17 +254,16 @@ export async function updateMe(req: Request, res: Response): Promise<void> {
  */
 export async function changeMyPassword(req: Request, res: Response): Promise<void> {
   try {
-    const userId = getUserIdFromReq(req);
-    if (!userId) {
+    const userPayload = (req as AuthenticatedRequest).user;
+    if (!userPayload || !userPayload.id) {
       res.status(401).json({ message: "No autenticado" });
       return;
     }
+    const userId = userPayload.id;
 
     const { newPassword } = req.body || {};
     if (!newPassword || String(newPassword).length < 6) {
-      res
-        .status(400)
-        .json({ message: "La contraseña debe tener al menos 6 caracteres" });
+      res.status(400).json({ message: "La contraseña debe tener al menos 6 caracteres" });
       return;
     }
 
@@ -298,9 +274,12 @@ export async function changeMyPassword(req: Request, res: Response): Promise<voi
     }
 
     user.password = await bcrypt.hash(String(newPassword), 10);
-    await user.save();
+    const updatedUser = await user.save();
 
-    res.status(200).json({ message: "Contraseña actualizada" });
+    await purgeUserCache({ id: userId, email: user.email }).catch(() => {});
+    const token = refreshUserSession(res, updatedUser);
+
+    res.status(200).json({ message: "Contraseña actualizada", token });
   } catch (e: any) {
     res.status(500).json({ message: "Error al cambiar contraseña", error: e.message });
   }
@@ -321,16 +300,10 @@ export const toggleCuentaVerifyUser = async (req: Request, res: Response): Promi
       { new: true, runValidators: false }
     );
     res.status(200).json({
-      message: nuevoEstado
-        ? "Cuenta verificada correctamente."
-        : "Verificación removida.",
+      message: nuevoEstado ? "Cuenta verificada." : "Verificación removida.",
       cuenta_verify: updatedUser?.cuenta_verify,
     });
   } catch (error: any) {
-    console.error("❌ Error al actualizar cuenta_verify:", error);
-    res.status(500).json({
-      error: "Error al actualizar el estado de verificación.",
-      details: error.message,
-    });
+    res.status(500).json({ error: "Error interno", details: error.message });
   }
 };
